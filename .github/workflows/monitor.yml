@@ -27,6 +27,7 @@ jobs:
       - name: Run monitor
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          PROXY_URL: ${{ secrets.PROXY_URL }}
         run: python haraj_monitor.py
 
       - name: Commit seen_listings.json if changed

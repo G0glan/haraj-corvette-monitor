@@ -61,7 +61,8 @@ REQUEST_TIMEOUT = 20
 #        "https": "http://user:pass@proxy-host:port",
 #    }
 # ─────────────────────────────────────────────
-PROXIES = {}
+_proxy_url = os.environ.get("PROXY_URL", "")
+PROXIES = {"http": _proxy_url, "https": _proxy_url} if _proxy_url else {}
 
 # ─────────────────────────────────────────────
 #  LOGGING
@@ -183,10 +184,12 @@ def fetch_listings(keyword: str) -> list[dict]:
         log.error("Network error: %s", exc)
         return []
 
+    log.info("API response: HTTP %s, body length: %d bytes", response.status_code, len(response.content))
     try:
         body = response.json()
     except json.JSONDecodeError as exc:
         log.error("Failed to decode JSON response: %s", exc)
+        log.error("Raw response (first 500 chars): %r", response.text[:500])
         return []
 
     # Navigate the expected GraphQL response shape safely
