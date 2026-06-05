@@ -42,6 +42,33 @@ SEARCH_KEYWORD = "كورفيت"
 # Haraj search page base URL
 SEARCH_URL = "https://haraj.com.sa/search/"
 
+# Listings whose title contains ANY of these words are skipped.
+# Add or remove Arabic terms to tune what counts as a "non-car" listing.
+EXCLUDE_KEYWORDS = [
+    "رنج",       # rims / wheels
+    "رنجات",     # rims (plural)
+    "إطار",      # tire
+    "اطار",      # tire (alternate spelling)
+    "طارات",     # tires
+    "عجل",       # wheel
+    "عجلات",     # wheels
+    "ملحقات",    # accessories
+    "قطع غيار", # spare parts
+    "قطعة",      # part
+    "مقود",      # steering wheel
+    "مقاعد",     # seats
+    "مقعد",      # seat
+    "مرايا",     # mirrors
+    "مصابيح",    # lights / headlights
+    "فانوس",     # headlight
+    "كاميرا",    # camera
+    "صدام",      # bumper
+    "شنطة",      # trunk lid
+    "كبوت",      # hood
+    "باب",       # door
+    "زجاج",      # glass
+]
+
 # File to persist seen listing IDs between runs
 STATE_FILE = Path("seen_listings.json")
 
@@ -375,8 +402,20 @@ def main() -> None:
     raw_listings = fetch_listings(SEARCH_KEYWORD)
     log.info("Fetched %d listings from page.", len(raw_listings))
 
+    # Filter out parts / accessories based on title keywords
+    def is_car_listing(raw: dict) -> bool:
+        title = (raw.get("title") or "").lower()
+        for kw in EXCLUDE_KEYWORDS:
+            if kw in title:
+                log.debug("Skipping non-car listing ('%s'): matched '%s'", raw.get("title"), kw)
+                return False
+        return True
+
+    car_listings = [r for r in raw_listings if is_car_listing(r)]
+    log.info("%d listings remain after filtering out parts/accessories.", len(car_listings))
+
     new_count = 0
-    for raw in raw_listings:
+    for raw in car_listings:
         listing = parse_listing(raw)
         if listing is None:
             continue
