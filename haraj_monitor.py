@@ -36,8 +36,8 @@ DISCORD_WEBHOOK_URL = os.environ.get(
     "https://discord.com/api/webhooks/1512587129933529088/ML2XATur7-_AXIr04SUkIN91D37p8Et6oFJn9D1X9MeXpP-_ajQ1D6aLR1SwcbB7ugsr"
 )
 
-# Search keyword (Arabic for "Corvette")
-SEARCH_KEYWORD = "كورفيت"
+# Search keywords — all are fetched and merged (duplicates removed by listing ID)
+SEARCH_KEYWORDS = ["كورفيت", "corvette"]
 
 # Haraj search page base URL
 SEARCH_URL = "https://haraj.com.sa/search/"
@@ -389,7 +389,7 @@ def send_discord_alert(listing: dict) -> bool:
 def main() -> None:
     log.info("=" * 55)
     log.info("  Haraj Corvette Monitor — starting up")
-    log.info("  Keyword : %s", SEARCH_KEYWORD)
+    log.info("  Keywords: %s", ", ".join(SEARCH_KEYWORDS))
     log.info("  State   : %s", STATE_FILE.resolve())
     log.info("  Proxies : %s", "Enabled" if PROXIES else "Disabled")
     log.info("  Webhook : %s", "Configured ✓" if DISCORD_WEBHOOK_URL != "YOUR_DISCORD_WEBHOOK_URL_HERE" else "⚠️  NOT SET")
@@ -398,12 +398,7 @@ def main() -> None:
     seen_ids = load_seen_ids()
     log.info("Loaded %d previously seen listing IDs.", len(seen_ids))
 
-    log.info("─── Polling Haraj for '%s' ───", SEARCH_KEYWORD)
-
-    raw_listings = fetch_listings(SEARCH_KEYWORD)
-    log.info("Fetched %d listings from page.", len(raw_listings))
-
-    # Filter out parts / accessories based on title keywords
+    # Fetch all keywords and merge, deduplicating by listing ID
     def is_car_listing(raw: dict) -> bool:
         title = (raw.get("title") or "").lower()
         for kw in EXCLUDE_KEYWORDS:
@@ -412,8 +407,21 @@ def main() -> None:
                 return False
         return True
 
-    car_listings = [r for r in raw_listings if is_car_listing(r)]
-    log.info("%d listings remain after filtering out parts/accessories.", len(car_listings))
+    seen_fetch_ids: set[str] = set()
+    car_listings = []
+    for keyword in SEARCH_KEYWORDS:
+        log.info("─── Polling Haraj for '%s' ───", keyword)
+        raw_listings = fetch_listings(keyword)
+        log.info("Fetched %d listings for '%s'.", len(raw_listings), keyword)
+        for raw in raw_listings:
+            listing_id = str(raw.get("id", ""))
+            if listing_id in seen_fetch_ids:
+                continue  # duplicate across keywords — skip
+            seen_fetch_ids.add(listing_id)
+            if is_car_listing(raw):
+                car_listings.append(raw)
+
+    log.info("%d unique car listings after merging and filtering.", len(car_listings))
 
     new_count = 0
     for raw in car_listings:
