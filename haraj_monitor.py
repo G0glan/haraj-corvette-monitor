@@ -1,11 +1,11 @@
 """
 haraj_monitor.py
 ────────────────────────────────────────────────────────────────
-Monitors Haraj (haraj.com.sa) for new C6 Corvette listings via
-their GraphQL API and sends formatted Discord Webhook alerts.
+Monitors Haraj (haraj.com.sa) for new C6 Corvette listings by
+scraping the search results page and sends Discord Webhook alerts.
 
 Requirements:
-    pip install requests
+    pip install requests beautifulsoup4
 
 Usage:
     1. Set DISCORD_WEBHOOK_URL below (or export as env variable).
@@ -16,13 +16,14 @@ Usage:
 
 import json
 import os
-import random
-import time
+import re
 import logging
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 
 import requests
+from bs4 import BeautifulSoup
 
 # ─────────────────────────────────────────────
 #  CONFIGURATION  (edit these)
@@ -38,8 +39,8 @@ DISCORD_WEBHOOK_URL = os.environ.get(
 # Search keyword (Arabic for "Corvette")
 SEARCH_KEYWORD = "كورفيت"
 
-# GraphQL endpoint
-GRAPHQL_URL = "https://graphql.haraj.com.sa/"
+# Haraj search page base URL
+SEARCH_URL = "https://haraj.com.sa/search/"
 
 # File to persist seen listing IDs between runs
 STATE_FILE = Path("seen_listings.json")
@@ -84,61 +85,25 @@ HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/125.0.0.0 Safari/537.36"
     ),
-    "Accept": "application/json, text/plain, */*",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "ar-SA,ar;q=0.9,en-US;q=0.8,en;q=0.7",
     "Accept-Encoding": "gzip, deflate, br",
-    "Content-Type": "application/json",
-    "Origin": "https://haraj.com.sa",
-    "Referer": "https://haraj.com.sa/",
     "DNT": "1",
     "Connection": "keep-alive",
-    "Sec-Fetch-Dest": "empty",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "same-site",
-    # Chrome Client Hints — required by Haraj's bot detection
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
     "Sec-CH-UA": '"Google Chrome";v="125", "Chromium";v="125", "Not/A)Brand";v="8"',
     "Sec-CH-UA-Mobile": "?0",
     "Sec-CH-UA-Platform": '"Windows"',
-    "Sec-CH-UA-Arch": '"x86"',
-    "Sec-CH-UA-Bitness": '"64"',
-    "Sec-CH-UA-Full-Version-List": '"Google Chrome";v="125.0.6422.112", "Chromium";v="125.0.6422.112", "Not/A)Brand";v="8.0.0.0"',
 }
 
-
-# ─────────────────────────────────────────────
-#  GRAPHQL PAYLOAD
-# ─────────────────────────────────────────────
-def build_graphql_payload(keyword: str, page: int = 1) -> dict:
-    """
-    Builds the GraphQL request payload for searching Haraj listings.
-    The query targets the standard search fields used by the Haraj web app.
-    """
-    return {
-        "operationName": "searchPosts",
-        "variables": {
-            "query": keyword,
-            "page": page,
-            "size": 30,          # listings per page
-            "sort": "date",      # newest first
-        },
-        "query": """
-            query searchPosts($query: String!, $page: Int, $size: Int, $sort: String) {
-              postSearch(query: $query, page: $page, size: $size, sort: $sort) {
-                results {
-                  id
-                  title
-                  price
-                  city
-                  date
-                  authorName
-                  bodyHTML
-                }
-                total
-                page
-              }
-            }
-        """,
-    }
+# Regex patterns for parsing listing links from HTML
+_LISTING_HREF_RE = re.compile(r"^/(\d{7,})/([^/?#]*)")
+_CITY_HREF_RE    = re.compile(r"/cit(?:y|ies)/", re.IGNORECASE)
+_USER_HREF_RE    = re.compile(r"/users?/", re.IGNORECASE)
 
 
 # ─────────────────────────────────────────────
@@ -164,31 +129,18 @@ def save_seen_ids(seen_ids: set) -> None:
 
 
 # ─────────────────────────────────────────────
-#  HARAJ API  —  fetch listings
+#  HARAJ HTML SCRAPER  —  fetch listings
 # ─────────────────────────────────────────────
 def fetch_listings(keyword: str) -> list[dict]:
     """
-    Sends a GraphQL POST request to Haraj and returns a list of
-    raw listing dicts. Returns an empty list on any failure.
+    GETs the Haraj search results page and parses listing cards from the HTML.
+    Returns a list of raw listing dicts. Returns an empty list on any failure.
     """
-    payload = build_graphql_payload(keyword)
-    session = requests.Session()
-    # Warm up the session so the AWS ALB sets its sticky-session cookies
+    url = SEARCH_URL + urllib.parse.quote(keyword)
     try:
-        session.get(
-            "https://haraj.com.sa/",
-            headers={k: v for k, v in HEADERS.items() if k != "Content-Type"},
-            proxies=PROXIES or None,
-            timeout=REQUEST_TIMEOUT,
-        )
-    except requests.exceptions.RequestException:
-        pass  # Non-fatal; proceed without warmup cookies
-
-    try:
-        response = session.post(
-            GRAPHQL_URL,
+        response = requests.get(
+            url,
             headers=HEADERS,
-            json=payload,
             proxies=PROXIES or None,
             timeout=REQUEST_TIMEOUT,
         )
@@ -196,34 +148,73 @@ def fetch_listings(keyword: str) -> list[dict]:
     except requests.exceptions.Timeout:
         log.error("Request timed out after %s seconds.", REQUEST_TIMEOUT)
         return []
-    except requests.exceptions.ProxyError as exc:
-        log.error("Proxy error: %s", exc)
-        return []
     except requests.exceptions.RequestException as exc:
         log.error("Network error: %s", exc)
         return []
 
-    log.info("API response: HTTP %s, body length: %d bytes", response.status_code, len(response.content))
-    try:
-        body = response.json()
-    except json.JSONDecodeError as exc:
-        log.error("Failed to decode JSON response: %s", exc)
-        log.error("Raw response (first 500 chars): %r", response.text[:500])
-        return []
+    log.info("Search page: HTTP %s, %d bytes", response.status_code, len(response.content))
 
-    # Navigate the expected GraphQL response shape safely
-    try:
-        results = body["data"]["postSearch"]["results"]
-        if not isinstance(results, list):
-            raise ValueError("'results' is not a list.")
-        return results
-    except (KeyError, TypeError, ValueError) as exc:
-        log.error(
-            "Unexpected API response shape — Haraj may have changed their schema. (%s)",
-            exc,
-        )
-        log.debug("Raw response body: %s", json.dumps(body, ensure_ascii=False)[:500])
-        return []
+    soup = BeautifulSoup(response.text, "html.parser")
+    seen_ids: set[str] = set()
+    results = []
+
+    for a_tag in soup.find_all("a", href=_LISTING_HREF_RE):
+        href = a_tag.get("href", "")
+        m = _LISTING_HREF_RE.match(href)
+        if not m:
+            continue
+        listing_id, slug = m.group(1), m.group(2)
+        if listing_id in seen_ids:
+            continue
+        seen_ids.add(listing_id)
+
+        # Title: link text, or fall back to decoding the URL slug
+        title = a_tag.get_text(strip=True)
+        if not title:
+            title = urllib.parse.unquote(slug).replace("-", " ").strip() or "No title"
+
+        # Walk up the DOM to find the card container (stop before a parent
+        # that holds multiple listing links — that's a list, not a card)
+        card = a_tag
+        for _ in range(8):
+            parent = card.parent
+            if parent is None:
+                break
+            if len(parent.find_all("a", href=_LISTING_HREF_RE)) > 1:
+                break
+            card = parent
+
+        city_a   = card.find("a", href=_CITY_HREF_RE)
+        city     = city_a.get_text(strip=True) if city_a else "Unknown"
+
+        user_a   = card.find("a", href=_USER_HREF_RE)
+        author   = user_a.get_text(strip=True) if user_a else "Unknown"
+
+        # Price: first text node that is purely numeric (≥3 digits)
+        price = None
+        for node in card.find_all(string=True):
+            clean = node.strip().replace(",", "").replace("ريال", "").strip()
+            if clean.isdigit() and len(clean) >= 3:
+                price = clean
+                break
+
+        # Date: prefer <time datetime="..."> ISO value, else visible text
+        time_el = card.find("time")
+        if time_el:
+            date = time_el.get("datetime") or time_el.get_text(strip=True)
+        else:
+            date = ""
+
+        results.append({
+            "id":         listing_id,
+            "title":      title,
+            "price":      price,
+            "city":       city,
+            "date":       date,
+            "authorName": author,
+        })
+
+    return results
 
 
 # ─────────────────────────────────────────────
@@ -256,11 +247,16 @@ def parse_listing(raw: dict) -> dict | None:
     # Format date
     if date_raw:
         try:
-            # Haraj typically returns Unix timestamps (seconds)
+            # Unix timestamp (seconds)
             dt = datetime.utcfromtimestamp(int(date_raw))
             date_str = dt.strftime("%Y-%m-%d %H:%M UTC")
         except (ValueError, TypeError, OSError):
-            date_str = str(date_raw)
+            try:
+                # ISO 8601 (from <time datetime="...">)
+                dt = datetime.fromisoformat(date_raw.replace("Z", "+00:00"))
+                date_str = dt.strftime("%Y-%m-%d %H:%M UTC")
+            except (ValueError, TypeError):
+                date_str = str(date_raw)  # relative text e.g. "قبل ٨ ساعات"
     else:
         date_str = "Unknown"
 
@@ -376,7 +372,7 @@ def main() -> None:
     log.info("─── Polling Haraj for '%s' ───", SEARCH_KEYWORD)
 
     raw_listings = fetch_listings(SEARCH_KEYWORD)
-    log.info("Fetched %d listings from API.", len(raw_listings))
+    log.info("Fetched %d listings from page.", len(raw_listings))
 
     new_count = 0
     for raw in raw_listings:
