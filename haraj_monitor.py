@@ -95,6 +95,13 @@ HEADERS = {
     "Sec-Fetch-Dest": "empty",
     "Sec-Fetch-Mode": "cors",
     "Sec-Fetch-Site": "same-site",
+    # Chrome Client Hints — required by Haraj's bot detection
+    "Sec-CH-UA": '"Google Chrome";v="125", "Chromium";v="125", "Not/A)Brand";v="8"',
+    "Sec-CH-UA-Mobile": "?0",
+    "Sec-CH-UA-Platform": '"Windows"',
+    "Sec-CH-UA-Arch": '"x86"',
+    "Sec-CH-UA-Bitness": '"64"',
+    "Sec-CH-UA-Full-Version-List": '"Google Chrome";v="125.0.6422.112", "Chromium";v="125.0.6422.112", "Not/A)Brand";v="8.0.0.0"',
 }
 
 
@@ -165,8 +172,20 @@ def fetch_listings(keyword: str) -> list[dict]:
     raw listing dicts. Returns an empty list on any failure.
     """
     payload = build_graphql_payload(keyword)
+    session = requests.Session()
+    # Warm up the session so the AWS ALB sets its sticky-session cookies
     try:
-        response = requests.post(
+        session.get(
+            "https://haraj.com.sa/",
+            headers={k: v for k, v in HEADERS.items() if k != "Content-Type"},
+            proxies=PROXIES or None,
+            timeout=REQUEST_TIMEOUT,
+        )
+    except requests.exceptions.RequestException:
+        pass  # Non-fatal; proceed without warmup cookies
+
+    try:
+        response = session.post(
             GRAPHQL_URL,
             headers=HEADERS,
             json=payload,
@@ -185,7 +204,6 @@ def fetch_listings(keyword: str) -> list[dict]:
         return []
 
     log.info("API response: HTTP %s, body length: %d bytes", response.status_code, len(response.content))
-    log.info("Response headers: %s", dict(response.headers))
     try:
         body = response.json()
     except json.JSONDecodeError as exc:
