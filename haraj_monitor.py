@@ -153,6 +153,7 @@ def fetch_listings(keyword: str) -> list[dict]:
         return []
 
     log.info("Search page: HTTP %s, %d bytes", response.status_code, len(response.content))
+    response.encoding = "utf-8"
 
     soup = BeautifulSoup(response.text, "html.parser")
     seen_ids: set[str] = set()
