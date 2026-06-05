@@ -33,7 +33,7 @@ from bs4 import BeautifulSoup
 # export DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/..."
 DISCORD_WEBHOOK_URL = os.environ.get(
     "DISCORD_WEBHOOK_URL",
-    "https://discord.com/api/webhooks/1512564674711912538/b-LFXo21zWpj4RXIUEK1HBfl-oYuHbsIjUZg6Wdfj9N2OL4vzCx31DfsR5eycZ4Im-wY"
+    "https://discord.com/api/webhooks/1512587129933529088/ML2XATur7-_AXIr04SUkIN91D37p8Et6oFJn9D1X9MeXpP-_ajQ1D6aLR1SwcbB7ugsr"
 )
 
 # Search keyword (Arabic for "Corvette")
@@ -45,6 +45,7 @@ SEARCH_URL = "https://haraj.com.sa/search/"
 # Listings whose title contains ANY of these words are skipped.
 # Add or remove Arabic terms to tune what counts as a "non-car" listing.
 EXCLUDE_KEYWORDS = [
+    "جنوط",      # rims (colloquial)
     "رنج",       # rims / wheels
     "رنجات",     # rims (plural)
     "إطار",      # tire
