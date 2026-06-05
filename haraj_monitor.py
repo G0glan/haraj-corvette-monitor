@@ -185,6 +185,7 @@ def fetch_listings(keyword: str) -> list[dict]:
         return []
 
     log.info("API response: HTTP %s, body length: %d bytes", response.status_code, len(response.content))
+    log.info("Response headers: %s", dict(response.headers))
     try:
         body = response.json()
     except json.JSONDecodeError as exc:
