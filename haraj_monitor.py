@@ -39,8 +39,12 @@ DISCORD_WEBHOOK_URL = os.environ.get(
 # Search keywords — all are fetched and merged (duplicates removed by listing ID)
 SEARCH_KEYWORDS = ["كورفيت", "corvette"]
 
-# Haraj search page base URL
-SEARCH_URL = "https://haraj.com.sa/search/"
+# Model year filter
+YEAR_FROM = 2005
+YEAR_TO   = 2013
+
+# URL template — {keyword} and year filters are substituted at runtime
+SEARCH_URL_TEMPLATE = "https://haraj.com.sa/en/tags/{keyword}/filters/mFrom-{year_from},mTo-{year_to}"
 
 # Listings whose title contains ANY of these words are skipped.
 # Add or remove Arabic terms to tune what counts as a "non-car" listing.
@@ -164,7 +168,11 @@ def fetch_listings(keyword: str) -> list[dict]:
     GETs the Haraj search results page and parses listing cards from the HTML.
     Returns a list of raw listing dicts. Returns an empty list on any failure.
     """
-    url = SEARCH_URL + urllib.parse.quote(keyword)
+    url = SEARCH_URL_TEMPLATE.format(
+        keyword=urllib.parse.quote(keyword),
+        year_from=YEAR_FROM,
+        year_to=YEAR_TO,
+    )
     try:
         response = requests.get(
             url,
